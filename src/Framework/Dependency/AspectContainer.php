@@ -19,9 +19,15 @@ use Onion\Framework\Annotations\Annotated;
 use Onion\Framework\Aspects\Interfaces\AspectInterface;
 use ProxyManager\Configuration;
 use ProxyManager\Factory\AccessInterceptorValueHolderFactory;
+use Psr\Container\ContainerInterface;
 
-class AspectContainer extends Container
+class AspectContainer implements ContainerInterface
 {
+    /**
+     * @var ContainerInterface
+     */
+    private $container;
+
     /**
      * @var Reader
      */
@@ -41,9 +47,9 @@ class AspectContainer extends Container
      *
      * @throws \InvalidArgumentException
      */
-    public function __construct(array $definitions, Reader $reader, Configuration $configuration = null)
+    public function __construct(ContainerInterface $container, Reader $reader, Configuration $configuration = null)
     {
-        parent::__construct($definitions);
+        $this->container = $container;
         $this->reader = $reader;
         $this->dependencyProxyFactory = new AccessInterceptorValueHolderFactory($configuration);
     }
@@ -70,30 +76,9 @@ class AspectContainer extends Container
      */
     public function get($id)
     {
-        $dependency = null;
-        if ($this->has($id)) {
-            if ($this->isShared($id)) {
-                $dependency = $this->retrieveShared($id);
-            }
+        $dependency = $this->container->get($id);
 
-            if ($dependency === null) {
-                $dependency = $this->retrieveFromFactory($id);
-            }
-
-            if ($dependency === null) {
-                $dependency = $this->retrieveInvokable($id);
-            }
-
-            if (!$dependency instanceof $id && (class_exists($id) || interface_exists($id))) {
-                throw new Exception\ContainerErrorException(
-                    sprintf(
-                        'Resolved dependency "%s" is not instance of "%s"',
-                        get_class($dependency),
-                        $id
-                    )
-                );
-            }
-
+        if (is_object($dependency)) {
             $reader = $this->getAnnotationReader();
             $dependencyReflection = new \ReflectionClass($dependency);
             if (($annotation = $reader->getClassAnnotation($dependencyReflection, Annotated::class)) !== null) {
@@ -102,13 +87,14 @@ class AspectContainer extends Container
                  */
                 $dependency = $this->createDependencyProxy($dependency, $annotation->getMethods());
             }
-
-            return $dependency;
         }
 
-        throw new Exception\UnknownDependency(
-            sprintf('"%s" not registered with the container', $id)
-        );
+        return $dependency;
+    }
+
+    public function has($id)
+    {
+        return $this->container->has($id);
     }
 
     public function createDependencyProxy($dependency, array $methods = [])
@@ -126,9 +112,10 @@ class AspectContainer extends Container
                 $aspects[get_class($annotation)] = $this->retrieveAspects(get_class($annotation));
             }
 
-            $preCallbacks[$method] = function($proxy, $instance, $methodName, $params, &$returnEarly) use ($aspects) {
+            $preCallbacks[$method] = function ($proxy, $instance, $methodName, $params, &$returnEarly) use ($aspects) {
                 $returnValue = null;
-                $annotations = $this->getAnnotationReader()->getMethodAnnotations(new \ReflectionMethod($instance, $methodName));
+                $annotations = $this->getAnnotationReader()
+                    ->getMethodAnnotations(new \ReflectionMethod($instance, $methodName));
                 foreach ($annotations as $annotation) {
                     $invocation = new Invocation($instance, $methodName, $params, $returnValue);
                     foreach ($aspects[get_class($annotation)] as $aspect) {
@@ -144,8 +131,9 @@ class AspectContainer extends Container
                 return $returnValue;
             };
 
-            $postCallbacks[$method] = function($proxy, $instance, $methodName, $params, $returnValue, &$returnEarly) use ($aspects) {
-                $annotations = $this->getAnnotationReader()->getMethodAnnotations(new \ReflectionMethod($instance, $methodName));
+            $postCallbacks[$method] = function ($proxy, $instance, $methodName, $params, $returnValue, &$returnEarly) use ($aspects) {
+                $annotations = $this->getAnnotationReader()
+                    ->getMethodAnnotations(new \ReflectionMethod($instance, $methodName));
                 foreach ($annotations as $annotation) {
                     $invocation = new Invocation($instance, $methodName, $params, $returnValue);
                     foreach ($aspects[get_class($annotation)] as $aspect) {
@@ -177,8 +165,8 @@ class AspectContainer extends Container
      */
     protected function retrieveAspects($annotation)
     {
-        if (array_key_exists($annotation, $this->definitions['aspects'])) {
-            $aspects = (array) $this->definitions['aspects'][$annotation];
+        if ($this->container->has('aspects')) {
+            $aspects = (array) $this->container->get('aspects')[$annotation];
 
             foreach ($aspects as $index => &$aspect) {
                 if (!is_object($aspect)) {
