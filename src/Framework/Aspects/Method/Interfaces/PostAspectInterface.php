@@ -3,8 +3,9 @@ namespace Onion\Framework\Aspects\Method\Interfaces;
 
 use Onion\Framework\Annotations\Interfaces\AnnotationInterface;
 use Onion\Framework\Aspects\Interfaces\LateInvocationInterface;
+use Onion\Framework\Aspects\Interfaces\InvocationInterface;
 
 interface PostAspectInterface
 {
-    public function after(AnnotationInterface $annotation, LateInvocationInterface $invocation);
+    public function after(AnnotationInterface $annotation, InvocationInterface $invocation);
 }
