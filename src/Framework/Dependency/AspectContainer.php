@@ -11,25 +11,28 @@
 namespace Onion\Framework\Dependency;
 
 use Doctrine\Common\Annotations\Reader;
-use Interop\Container\Exception\ContainerException;
-use Interop\Container\Exception\NotFoundException;
 use Onion\Framework\Annotations\Annotated;
+use Onion\Framework\Aspects\EarlyInvocation;
 use Onion\Framework\Aspects\Interfaces\AspectInterface;
+use Onion\Framework\Aspects\Interfaces\InvocationInterface;
 use Onion\Framework\Aspects\Interfaces\PostMethodAspectInterface;
 use Onion\Framework\Aspects\Invocation;
+use Onion\Framework\Aspects\LateInvocation;
+use Onion\Framework\Aspects\Method\Interfaces\AroundAspectInterface;
+use Onion\Framework\Aspects\Method\Interfaces\PostAspectInterface;
+use Onion\Framework\Aspects\Method\Interfaces\PreAspectInterface;
 use Onion\Framework\Aspects\Property\Interfaces\PostAssignAspectInterface;
 use Onion\Framework\Aspects\Property\Interfaces\PostDeleteAspectInterface;
 use Onion\Framework\Aspects\Property\Interfaces\PostFetchAspectInterface;
 use Onion\Framework\Aspects\Property\Interfaces\PreAssignAspectInterface;
 use Onion\Framework\Aspects\Property\Interfaces\PreDeleteAspectInterface;
 use Onion\Framework\Aspects\Property\Interfaces\PreFetchAspectInterface;
+use Onion\Framework\Aspects\PropertyAccess;
 use Onion\Framework\Dependency\Exception;
 use ProxyManager\Configuration;
+use ProxyManager\Factory\AccessInterceptorScopeLocalizerFactory;
 use ProxyManager\Factory\AccessInterceptorValueHolderFactory;
 use Psr\Container\ContainerInterface;
-use Onion\Framework\Aspects\PropertyAccess;
-use Onion\Framework\Aspects\EarlyInvocation;
-use Onion\Framework\Aspects\LateInvocation;
 
 class AspectContainer implements ContainerInterface
 {
@@ -61,7 +64,7 @@ class AspectContainer implements ContainerInterface
     {
         $this->container = $container;
         $this->reader = $reader;
-        $this->dependencyProxyFactory = new AccessInterceptorValueHolderFactory($configuration);
+        $this->dependencyProxyFactory = new AccessInterceptorScopeLocalizerFactory($configuration);
     }
 
     /**
@@ -111,7 +114,7 @@ class AspectContainer implements ContainerInterface
         return $this->container->has($id);
     }
 
-    public function createDependencyProxy($dependency, array $methods = [], array $properties = [])
+    public function createDependencyProxy(object $dependency, array $methods = [], array $properties = []): object
     {
         $reader = $this->getAnnotationReader();
         $preCallbacks = [];
@@ -119,7 +122,7 @@ class AspectContainer implements ContainerInterface
         foreach ($methods as $method) {
             $annotations = $reader->getMethodAnnotations(new \ReflectionMethod($dependency, $method));
             /**
-             * @var $aspects AspectInterface[][]
+             * @var AspectInterface[] $aspects
              */
             $aspects = [];
             foreach ($annotations as $annotation) {
@@ -130,157 +133,67 @@ class AspectContainer implements ContainerInterface
             $postCallbacks[$method] = $this->getPostMethodCallback($aspects);
         }
 
-        foreach ($properties as $property) {
-            $annotations = $reader->getPropertyAnnotations(new \ReflectionProperty($dependency, $property));
-            /**
-             * @var $aspects AspectInterface[][]
-             */
-            $aspects = [];
-            foreach ($annotations as $annotation) {
-                $aspects[] = [$annotation, $this->retrieveAspects(get_class($annotation))];
-            }
-
-            // Pre property
-            $preCallbacks['__get'] = $this->getPrePropertyCallback(
-                $property,
-                array_filter($aspects, function ($aspect) {
-                    return ($aspect[1] instanceof PreFetchAspectInterface);
-                })
-            );
-            $preCallbacks['__set'] = $this->getPrePropertyCallback(
-                $property,
-                array_filter($aspects, function ($aspect) {
-                    return ($aspect[1] instanceof PreAssignAspectInterface);
-                })
-            );
-            $preCallbacks['__unset'] = $this->getPrePropertyCallback(
-                $property,
-                array_filter($aspects, function ($aspect) {
-                    return ($aspect[1] instanceof PreDeleteAspectInterface);
-                })
-            );
-
-            // Post property
-            $postCallbacks['__get'] = $this->getPostPropertyCallback(
-                $property,
-                array_filter($aspects, function ($aspect) {
-                    return ($aspect[1] instanceof PostFetchAspectInterface);
-                })
-            );
-            $postCallbacks['__set'] = $this->getPostPropertyCallback(
-                $property,
-                array_filter($aspects, function ($aspect) {
-                    return ($aspect[1] instanceof PostAssignAspectInterface);
-                })
-            );
-            $postCallbacks['__unset'] = $this->getPostPropertyCallback(
-                $property,
-                array_filter($aspects, function ($aspect) {
-                    return ($aspect[1] instanceof PostDeleteAspectInterface);
-                })
-            );
-        }
-
         return $this->dependencyProxyFactory->createProxy($dependency, $preCallbacks, $postCallbacks);
     }
 
     private function getPreMethodCallback(array $aspects): callable
     {
         $aspects = array_filter($aspects, function ($aspect) {
-            return ($aspect[1] instanceof PostMethodAspectInterface);
+            return ($aspect[1] instanceof PreAspectInterface);
         });
 
         return function ($proxy, $instance, $methodName, $params, &$returnEarly) use ($aspects) {
-            $invocation = new EarlyInvocation($instance, $methodName, $params, $returnEarly);
+            $callbacks = [];
             foreach ($aspects as $aspect) {
-                [$annotation, $aspect]=$aspect;
-                $returnValue = $aspect->before($annotation, $invocation);
+                list($annotation, $aspect) = $aspect;
 
-                if ($invocation->isReturnEarly()) {
-                    $returnEarly = true;
-                    return $returnValue;
-                }
+                $callbacks[] = function (InvocationInterface $invocation) use ($aspect, $annotation, &$returnEarly) {
+                    $value = $aspect->before($annotation, $invocation);
+                    if ($returnEarly) {
+                        return $value;
+                    }
+
+                    $invocation->continue();
+                };
             }
 
-            return $returnValue ?? null;
+            return (new Invocation(
+                [$instance, $methodName],
+                $params,
+                $callbacks,
+                $returnEarly
+            ))->continue();
         };
     }
 
     private function getPostMethodCallback(array $aspects): callable
     {
         $aspects = array_filter(array_reverse($aspects), function ($aspect) {
-            return ($aspect[1] instanceof PostMethodAspectInterface);
+            return ($aspect[1] instanceof PostAspectInterface);
         });
 
         return function ($proxy, $instance, $methodName, $params, $returnValue, &$returnEarly) use ($aspects) {
-            $invocation = new LateInvocation($instance, $methodName, $params, $returnEarly, $returnValue);
+            $callbacks = [];
             foreach ($aspects as $aspect) {
-                [$annotation, $aspect]=$aspect;
-                $returnValue = $aspect->after($annotation, $invocation);
+                list($annotation, $aspect)=$aspect;
 
-                if ($invocation->isReturnEarly()) {
-                    $returnEarly = true;
-                    return $returnValue;
-                }
+                $callbacks[] = function (InvocationInterface $invocation) use ($aspect, $annotation, &$returnEarly) {
+                    $value = $aspect->after($annotation, $invocation);
+                    if ($returnEarly) {
+                        return $value;
+                    }
+
+                    $invocation->continue();
+                };
             }
 
-            return $returnValue;
-        };
-    }
-
-    private function getPrePropertyCallback(string $property, array $aspects): callable
-    {
-        return function ($proxy, $instance, $methodName, $params, &$returnEarly) use ($property, $aspects) {
-            if ($params['name'] !== $property) {
-                return;
-            }
-
-            $access = new PropertyAccess(
-                $instance,
-                $params['name'],
-                $instance->{$params['name']},
-                $params['value'] ?? null
-            );
-            foreach ($aspects as $aspect) {
-                [$annotation, $aspect]=$aspect;
-                $returnValue = $aspect->before($annotation, $access);
-
-                if ($access->isReturnEarly()) {
-                    $returnEarly = true;
-                    return $returnValue;
-                }
-            }
-
-            return $returnValue ?? null;
-        };
-    }
-
-    private function getPostPropertyCallback(string $property, array $aspects): callable
-    {
-        $aspects = array_reverse($aspects);
-
-        return function ($proxy, $instance, $methodName, $params, &$returnEarly) use ($property, $aspects) {
-            if ($params['name'] !== $property) {
-                return;
-            }
-
-            $access = new PropertyAccess(
-                $instance,
-                $params['name'],
-                $instance->{$params['name']},
-                $params['value'] ?? null
-            );
-            foreach ($aspects as $aspect) {
-                [$annotation, $aspect]=$aspect;
-                $returnValue = $aspect->after($annotation, $access);
-
-                if ($access->isReturnEarly()) {
-                    $returnEarly = true;
-                    return $returnValue;
-                }
-            }
-
-            return $returnValue ?? null;
+            return (new Invocation(
+                [$instance, $methodName],
+                $params,
+                $callbacks,
+                $returnEarly,
+                $returnValue
+            ))->continue();
         };
     }
 
