@@ -12,12 +12,12 @@
     "require": {
         "php": "^7.2",
         "roave/security-advisories": "dev-master",
-        "onion/annotations": "dev-master",
-        "onion/framework": "dev-develop",
+        "onion/annotations": "^1.0",
         "ocramius/proxy-manager": "^2.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "^5.5"
+        "phpunit/phpunit": "^5.5",
+        "onion/framework": "^2.0"
     },
     "autoload": {
         "psr-4": {
