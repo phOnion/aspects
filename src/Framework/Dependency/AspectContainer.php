@@ -1,37 +1,16 @@
-<?php
-/**
- * PHP Version 5.6.0
- *
- * @category Unknown Category
- * @package  Onion\Framework\Dependency
- * @author   Dimitar Dimitrov <daghostman.dd@gmail.com>
- * @license  MIT https://opensource.org/licenses/MIT
- * @link     https://github.com/phOnion/framework
- */
+<?php declare(strict_types=1);
 namespace Onion\Framework\Dependency;
 
 use Doctrine\Common\Annotations\Reader;
 use Onion\Framework\Annotations\Annotated;
-use Onion\Framework\Aspects\EarlyInvocation;
 use Onion\Framework\Aspects\Interfaces\AspectInterface;
 use Onion\Framework\Aspects\Interfaces\InvocationInterface;
-use Onion\Framework\Aspects\Interfaces\PostMethodAspectInterface;
 use Onion\Framework\Aspects\Invocation;
-use Onion\Framework\Aspects\LateInvocation;
-use Onion\Framework\Aspects\Method\Interfaces\AroundAspectInterface;
 use Onion\Framework\Aspects\Method\Interfaces\PostAspectInterface;
 use Onion\Framework\Aspects\Method\Interfaces\PreAspectInterface;
-use Onion\Framework\Aspects\Property\Interfaces\PostAssignAspectInterface;
-use Onion\Framework\Aspects\Property\Interfaces\PostDeleteAspectInterface;
-use Onion\Framework\Aspects\Property\Interfaces\PostFetchAspectInterface;
-use Onion\Framework\Aspects\Property\Interfaces\PreAssignAspectInterface;
-use Onion\Framework\Aspects\Property\Interfaces\PreDeleteAspectInterface;
-use Onion\Framework\Aspects\Property\Interfaces\PreFetchAspectInterface;
-use Onion\Framework\Aspects\PropertyAccess;
 use Onion\Framework\Dependency\Exception;
 use ProxyManager\Configuration;
 use ProxyManager\Factory\AccessInterceptorScopeLocalizerFactory;
-use ProxyManager\Factory\AccessInterceptorValueHolderFactory;
 use Psr\Container\ContainerInterface;
 
 class AspectContainer implements ContainerInterface
@@ -47,7 +26,7 @@ class AspectContainer implements ContainerInterface
     protected $reader;
 
     /**
-     * @var AccessInterceptorValueHolderFactory
+     * @var AccessInterceptorScopeLocalizerFactory
      */
     protected $dependencyProxyFactory;
 
@@ -100,8 +79,7 @@ class AspectContainer implements ContainerInterface
                  */
                 $dependency = $this->createDependencyProxy(
                     $dependency,
-                    $annotation->getMethods(),
-                    $annotation->getProperties()
+                    $annotation->getMethods()
                 );
             }
         }
@@ -114,7 +92,7 @@ class AspectContainer implements ContainerInterface
         return $this->container->has($id);
     }
 
-    public function createDependencyProxy(object $dependency, array $methods = [], array $properties = []): object
+    private function createDependencyProxy(object $dependency, array $methods = []): object
     {
         $reader = $this->getAnnotationReader();
         $preCallbacks = [];
@@ -148,7 +126,7 @@ class AspectContainer implements ContainerInterface
                 list($annotation, $aspect) = $aspect;
 
                 $callbacks[] = function (InvocationInterface $invocation) use ($aspect, $annotation, &$returnEarly) {
-                    $value = $aspect->before($annotation, $invocation);
+                    $value = $aspect->before(clone $annotation, $invocation);
                     if ($returnEarly) {
                         return $value;
                     }
