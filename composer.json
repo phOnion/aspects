@@ -1,7 +1,7 @@
 {
     "name": "onion/aspects",
+    "description": "Provides AOP-based method decorators",
     "keywords": ["annotations", "phOnion", "onion"],
-    "minimum-stability": "rc",
     "authors": [
         {
             "name": "Dimitar Dimitrov",
