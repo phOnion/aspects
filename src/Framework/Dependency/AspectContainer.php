@@ -4,11 +4,13 @@ namespace Onion\Framework\Dependency;
 use Doctrine\Common\Annotations\AnnotationException;
 use Doctrine\Common\Annotations\Reader;
 use Onion\Framework\Annotations\Annotated;
+use Onion\Framework\Annotations\Interfaces\AnnotationInterface;
 use Onion\Framework\Aspects\Interfaces\AspectInterface;
 use Onion\Framework\Aspects\Interfaces\InvocationInterface;
 use Onion\Framework\Aspects\Invocation;
 use Onion\Framework\Aspects\Method\Interfaces\PostAspectInterface;
 use Onion\Framework\Aspects\Method\Interfaces\PreAspectInterface;
+use Onion\Framework\Common\Collection\Collection;
 use Onion\Framework\Dependency\Exception;
 use ProxyManager\Configuration;
 use ProxyManager\Factory\AccessInterceptorScopeLocalizerFactory;
@@ -78,10 +80,7 @@ class AspectContainer implements ContainerInterface
                     /**
                      * @var Annotated $annotation
                      */
-                    $dependency = $this->createDependencyProxy(
-                        $dependency,
-                        $dependencyReflection->getMethods(\ReflectionMethod::IS_PUBLIC)
-                    );
+                    $dependency = $this->createDependencyProxy($dependency, $dependencyReflection);
                 }
             }
         } catch (AnnotationException $ex) {
@@ -122,18 +121,36 @@ class AspectContainer implements ContainerInterface
         return $annotated !== null;
     }
 
-    private function createDependencyProxy(object $dependency, array $methods = []): object
+    private function getClassAnnotations(\ReflectionClass $class)
+    {
+        $annotations = $this->getAnnotationReader()->getClassAnnotations($class);
+        if ($class->getParentClass()) {
+            $annotations = array_merge($annotations, $this->getClassAnnotations($class->getParentClass()));
+        }
+
+        return $annotations;
+    }
+
+    private function createDependencyProxy(object $dependency, \ReflectionClass $reflection): object
     {
         $preCallbacks = [];
         $postCallbacks = [];
-        foreach ($methods as $method) {
-            $annotations = $this->getAnnotationReader()->getMethodAnnotations($method);
+        foreach ($reflection->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
+            $annotations = (new Collection(array_merge(
+                $this->getClassAnnotations($reflection),
+                $this->getAnnotationReader()->getMethodAnnotations($method)
+            )))->unique()
+                ->filter(function (AnnotationInterface $annotation) {
+                    $annotation = get_class($annotation);
+                    return $this->container->has($annotation) && $annotation !== Annotated::class;
+                });
+
             /**
              * @var AspectInterface[] $aspects
              */
             $aspects = [];
             foreach ($annotations as $annotation) {
-                $aspects[] = [$annotation, $this->retrieveAspects(get_class($annotation))];
+                $aspects[] = [$annotation, $this->retrieveAspects($annotation)];
             }
 
             $preCallbacks[$method->getName()] = $this->getPreMethodCallback($aspects);
@@ -213,8 +230,9 @@ class AspectContainer implements ContainerInterface
      * @throws \Interop\Container\Exception\ContainerException
      * @throws Exception\UnknownDependency
      */
-    protected function retrieveAspects($annotation)
+    protected function retrieveAspects(AnnotationInterface $annotation)
     {
+        $annotation = get_class($annotation);
         if ($this->container->has('aspects')) {
             $aspects = $this->container->get('aspects');
             return $this->container->get(
