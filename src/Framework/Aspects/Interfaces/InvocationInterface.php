@@ -3,10 +3,11 @@ namespace Onion\Framework\Aspects\Interfaces;
 
 interface InvocationInterface
 {
-    public function continue();
-    public function getTarget();
-    public function getMethodName();
-    public function getParameters();
+    public function getTarget(): object;
+    public function getMethodName(): string;
+    public function getParameters(): array;
+    public function getReturnValue();
 
-    public function exit();
+    public function continue();
+    public function exit(): void;
 }

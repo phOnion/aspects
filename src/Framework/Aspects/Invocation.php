@@ -25,17 +25,17 @@ class Invocation implements InvocationInterface
         $this->returnValue = $returnValue;
     }
 
-    public function getMethodName()
+    public function getMethodName(): string
     {
         return $this->method;
     }
 
-    public function getTarget()
+    public function getTarget(): object
     {
         return $this->instance;
     }
 
-    public function getParameters()
+    public function getParameters(): array
     {
         return $this->params;
     }
@@ -45,7 +45,7 @@ class Invocation implements InvocationInterface
         return $this->returnValue;
     }
 
-    public function exit()
+    public function exit(): void
     {
         $this->earlyReturn = true;
     }
