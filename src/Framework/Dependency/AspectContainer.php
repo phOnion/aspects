@@ -11,13 +11,17 @@ use Onion\Framework\Aspects\Invocation;
 use Onion\Framework\Aspects\Method\Interfaces\PostAspectInterface;
 use Onion\Framework\Aspects\Method\Interfaces\PreAspectInterface;
 use Onion\Framework\Common\Collection\Collection;
+use Onion\Framework\Common\Dependency\Traits\WrappingContainerTrait;
 use Onion\Framework\Dependency\Exception;
+use Onion\Framework\Dependency\Interfaces\WrappingContainerInterface;
 use ProxyManager\Configuration;
 use ProxyManager\Factory\AccessInterceptorScopeLocalizerFactory;
 use Psr\Container\ContainerInterface;
 
-class AspectContainer implements ContainerInterface
+class AspectContainer implements ContainerInterface, WrappingContainerInterface
 {
+    use WrappingContainerTrait;
+
     /**
      * @var ContainerInterface
      */
@@ -42,9 +46,8 @@ class AspectContainer implements ContainerInterface
      *
      * @throws \InvalidArgumentException
      */
-    public function __construct(ContainerInterface $container, Reader $reader, Configuration $configuration = null)
+    public function __construct(Reader $reader, Configuration $configuration = null)
     {
-        $this->container = $container;
         $this->reader = $reader;
         $this->dependencyProxyFactory = new AccessInterceptorScopeLocalizerFactory($configuration);
     }
@@ -72,14 +75,11 @@ class AspectContainer implements ContainerInterface
     public function get($id)
     {
         try {
-            $dependency = $this->container->get($id);
+            $dependency = $this->getWrappedContainer()->get($id);
 
             if (is_object($dependency)) {
                 $dependencyReflection = new \ReflectionClass($dependency);
                 if ($this->isAnnotated($dependencyReflection)) {
-                    /**
-                     * @var Annotated $annotation
-                     */
                     $dependency = $this->createDependencyProxy($dependency, $dependencyReflection);
                 }
             }
@@ -100,6 +100,7 @@ class AspectContainer implements ContainerInterface
                 throw new \ParseError(trim(substr($ex->getMessage(), 18)), $ex->getCode(), $ex);
             }
 
+            throw new \RuntimeException("Error while processing annotations for '{$id}'");
             throw new \Error($ex->getMessage(), $ex->getCode(), $ex);
         }
 
@@ -108,7 +109,7 @@ class AspectContainer implements ContainerInterface
 
     public function has($id)
     {
-        return $this->container->has($id);
+        return $this->getWrappedContainer()->has($id);
     }
 
     private function isAnnotated(\ReflectionClass $class): bool
@@ -142,7 +143,7 @@ class AspectContainer implements ContainerInterface
             )))->unique()
                 ->filter(function (AnnotationInterface $annotation) {
                     $annotation = get_class($annotation);
-                    return $this->container->has($annotation) && $annotation !== Annotated::class;
+                    return $this->getWrappedContainer()->has($annotation) && $annotation !== Annotated::class;
                 });
 
             /**
@@ -233,9 +234,9 @@ class AspectContainer implements ContainerInterface
     protected function retrieveAspects(AnnotationInterface $annotation)
     {
         $annotation = get_class($annotation);
-        if ($this->container->has('aspects')) {
-            $aspects = $this->container->get('aspects');
-            return $this->container->get(
+        if ($this->getWrappedContainer()->has('aspects')) {
+            $aspects = $this->getWrappedContainer()->get('aspects');
+            return $this->getWrappedContainer()->get(
                 ($aspects instanceof ContainerInterface ? $aspects->get($annotation) : $aspects[$annotation])
             );
         }
