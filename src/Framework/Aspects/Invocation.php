@@ -1,46 +1,43 @@
-<?php
-/**
- * PHP Version 5.6.0
- *
- * @category Unknown Category
- * @package  Onion\Framework\Aspects
- * @author   Dimitar Dimitrov <daghostman.dd@gmail.com>
- * @license  MIT https://opensource.org/licenses/MIT
- * @link     https://github.com/phOnion/framework
- */
+<?php declare(strict_types=1);
 namespace Onion\Framework\Aspects;
 
 use Onion\Framework\Aspects\Interfaces\InvocationInterface;
+use Onion\Framework\Annotations\Interfaces\AnnotationInterface;
 
 class Invocation implements InvocationInterface
 {
-    private $instance;
-    private $methodName;
-    private $arguments;
-    private $returnValue;
-    private $returnEarly = false;
+    /** @var \Iterator */
+    private $callbacks = [];
 
-    public function __construct($instance, $methodName, $arguments, $returnValue)
+    private $instance;
+    private $method;
+    private $params;
+    private $earlyReturn;
+    private $returnValue;
+
+    public function __construct(array $target, array $params, array $callbacks, &$earlyReturn, $returnValue = null)
     {
-        $this->instance = $instance;
-        $this->methodName = $methodName;
-        $this->arguments = $arguments;
+        list($this->instance, $this->method) = $target;
+        $this->params = $params;
+
+        $this->callbacks = $callbacks;
+        $this->earlyReturn = &$earlyReturn;
         $this->returnValue = $returnValue;
     }
 
-    public function getObject()
+    public function getMethodName(): string
+    {
+        return $this->method;
+    }
+
+    public function getTarget(): object
     {
         return $this->instance;
     }
 
-    public function getMethodName()
+    public function getParameters(): array
     {
-        return $this->methodName;
-    }
-
-    public function getArguments()
-    {
-        return $this->arguments;
+        return $this->params;
     }
 
     public function getReturnValue()
@@ -48,13 +45,15 @@ class Invocation implements InvocationInterface
         return $this->returnValue;
     }
 
-    public function isReturnEarly()
+    public function exit(): void
     {
-        return (bool) $this->returnEarly;
+        $this->earlyReturn = true;
     }
 
-    public function setReturnEarly($state)
+    public function continue()
     {
-        $this->returnEarly = $state;
+        if (!empty($this->callbacks)) {
+            return (array_shift($this->callbacks))($this);
+        }
     }
 }
