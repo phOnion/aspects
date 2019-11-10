@@ -11,7 +11,7 @@
     "license": "MIT",
     "require": {
         "php": "^7.2",
-        "onion/annotations": "^1.0",
+        "onion/annotations": "dev-master",
         "onion/framework": "dev-develop",
         "onion/interfaces": "dev-master",
         "onion/common": "dev-master",
