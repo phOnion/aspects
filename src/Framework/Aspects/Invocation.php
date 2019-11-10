@@ -2,7 +2,6 @@
 namespace Onion\Framework\Aspects;
 
 use Onion\Framework\Aspects\Interfaces\InvocationInterface;
-use Onion\Framework\Annotations\Interfaces\AnnotationInterface;
 
 class Invocation implements InvocationInterface
 {
