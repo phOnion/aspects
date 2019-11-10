@@ -15,8 +15,10 @@ use Onion\Framework\Common\Dependency\Traits\WrappingContainerTrait;
 use Onion\Framework\Dependency\Exception;
 use Onion\Framework\Dependency\Interfaces\WrappingContainerInterface;
 use ProxyManager\Configuration;
-use ProxyManager\Factory\AccessInterceptorScopeLocalizerFactory;
+use ProxyManager\Factory\AccessInterceptorValueHolderFactory;
+use ProxyManager\Factory\LazyLoadingValueHolderFactory;
 use Psr\Container\ContainerInterface;
+use ProxyManager\Proxy\LazyLoadingInterface;
 
 class AspectContainer implements ContainerInterface, WrappingContainerInterface
 {
@@ -33,9 +35,14 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
     protected $reader;
 
     /**
-     * @var AccessInterceptorScopeLocalizerFactory
+     * @var AccessInterceptorValueHolderFactory
      */
     protected $dependencyProxyFactory;
+
+    /**
+     * @var LazyLoadingValueHolderFactory;
+     */
+    private $lazyFactory;
 
     /**
      * AspectContainer constructor.
@@ -49,7 +56,8 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
     public function __construct(Reader $reader, Configuration $configuration = null)
     {
         $this->reader = $reader;
-        $this->dependencyProxyFactory = new AccessInterceptorScopeLocalizerFactory($configuration);
+        $this->dependencyProxyFactory = new AccessInterceptorValueHolderFactory($configuration);
+        $this->lazyFactory = new LazyLoadingValueHolderFactory($configuration);
     }
 
     /**
@@ -75,6 +83,32 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
     public function get($id)
     {
         try {
+            if (class_exists($id) || interface_exists($id)) {
+                return $this->lazyFactory->createProxy(
+                    $id,
+                    function(
+                        &$wrappedObject,
+                        LazyLoadingInterface $proxy,
+                        $method,
+                        array $parameters,
+                        &$initializer
+                    ) use ($id) {
+                        $initializer = null;
+                        $reflection = new \ReflectionClass($id);
+                        if ($this->isAnnotated($reflection)) {
+                            $wrappedObject = $this->createDependencyProxy(
+                                $this->getWrappedContainer()->get($id),
+                                $reflection
+                            );
+                        } else {
+                            $wrappedObject = $this->getWrappedContainer()->get($id);
+                        }
+
+                        return true;
+                    }
+                );
+            }
+
             $dependency = $this->getWrappedContainer()->get($id);
 
             if (is_object($dependency)) {
@@ -100,8 +134,11 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
                 throw new \ParseError(trim(substr($ex->getMessage(), 18)), $ex->getCode(), $ex);
             }
 
-            throw new \RuntimeException("Error while processing annotations for '{$id}'");
-            throw new \Error($ex->getMessage(), $ex->getCode(), $ex);
+            throw new \RuntimeException(
+                "Error while processing annotations for '{$id}': {$ex->getMessage()}",
+                $ex->getCode(),
+                $ex
+            );
         }
 
         return $dependency;
@@ -151,7 +188,11 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
              */
             $aspects = [];
             foreach ($annotations as $annotation) {
-                $aspects[] = [$annotation, $this->retrieveAspects($annotation)];
+                try {
+                    $aspects[] = [$annotation, $this->retrieveAspects($annotation)];
+                } catch (Exception\UnknownDependency $ex) {
+                    // Unable to find aspect for annotation, we ok to continue
+                }
             }
 
             $preCallbacks[$method->getName()] = $this->getPreMethodCallback($aspects);
@@ -222,22 +263,13 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
         };
     }
 
-    /**
-     * @param $annotation
-     *
-     * @return AspectInterface[]
-     * @throws \Onion\Framework\Dependency\Exception\ContainerErrorException
-     * @throws \Interop\Container\Exception\NotFoundException
-     * @throws \Interop\Container\Exception\ContainerException
-     * @throws Exception\UnknownDependency
-     */
-    protected function retrieveAspects(AnnotationInterface $annotation)
+    protected function retrieveAspects(AnnotationInterface $annotation): object
     {
         $annotation = get_class($annotation);
-        if ($this->getWrappedContainer()->has('aspects')) {
+        if ($this->has('aspects')) {
             $aspects = $this->getWrappedContainer()->get('aspects');
             return $this->getWrappedContainer()->get(
-                ($aspects instanceof ContainerInterface ? $aspects->get($annotation) : $aspects[$annotation])
+                ($aspects instanceof ContainerInterface ? $aspects->get($annotation) : $aspects[$annotation] ?? '')
             );
         }
 
