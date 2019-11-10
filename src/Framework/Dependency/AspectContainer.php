@@ -5,7 +5,6 @@ use Doctrine\Common\Annotations\AnnotationException;
 use Doctrine\Common\Annotations\Reader;
 use Onion\Framework\Annotations\Annotated;
 use Onion\Framework\Annotations\Interfaces\AnnotationInterface;
-use Onion\Framework\Aspects\Interfaces\AspectInterface;
 use Onion\Framework\Aspects\Interfaces\InvocationInterface;
 use Onion\Framework\Aspects\Invocation;
 use Onion\Framework\Aspects\Method\Interfaces\PostAspectInterface;
@@ -41,7 +40,7 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
     protected $dependencyProxyFactory;
 
     /**
-     * @var LazyLoadingValueHolderFactory;
+     * @var LazyLoadingValueHolderFactory
      */
     private $lazyFactory;
 
