@@ -17,8 +17,9 @@ use Onion\Framework\Dependency\Interfaces\WrappingContainerInterface;
 use ProxyManager\Configuration;
 use ProxyManager\Factory\AccessInterceptorValueHolderFactory;
 use ProxyManager\Factory\LazyLoadingValueHolderFactory;
-use Psr\Container\ContainerInterface;
 use ProxyManager\Proxy\LazyLoadingInterface;
+use Psr\Container\ContainerInterface;
+use Onion\Framework\Aspects\PropertyAccess;
 
 class AspectContainer implements ContainerInterface, WrappingContainerInterface
 {
@@ -199,23 +200,63 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
             $postCallbacks[$method->getName()] = $this->getPostMethodCallback($aspects);
         }
 
+        $propCallbacks = [];
+        foreach ($reflection->getProperties() as $property) {
+            $annotations = $this->reader->getPropertyAnnotations($property);
+            /**
+             * @var AspectInterface[] $aspects
+             */
+            $aspects = [];
+            foreach ($annotations as $annotation) {
+                $aspects[] = [$annotation, $this->retrieveAspects($annotation)];
+            }
+
+            $pre = $this->getPreMethodCallback($aspects, PropertyAccess::class);
+            $post = $this->getPostMethodCallback($aspects, PropertyAccess::class);
+
+            $propCallbacks[$property->getName()] = [$pre, $post];
+        }
+
+        $pre =  function ($proxy, $instance, $methodName, $params, &$early) use ($propCallbacks) {
+            if (isset($propCallbacks[$params['name']])) {
+                return ($propCallbacks[$params['name']])[0]($proxy, $instance, $methodName, $params, $early);
+            }
+        };
+
+        $post =  function ($proxy, $instance, $methodName, $params, $return, &$early) use ($propCallbacks) {
+            if (isset($propCallbacks[$params['name']])) {
+                return ($propCallbacks[$params['name']])[1]($proxy, $instance, $methodName, $params, $return, $early);
+            }
+        };
+
+        $preCallbacks['__get'] = $pre;
+        $preCallbacks['__set'] = $pre;
+        $preCallbacks['__isset'] = $pre;
+        $preCallbacks['__unset'] = $pre;
+
+        $postCallbacks['__get'] = $post;
+        $postCallbacks['__set'] = $post;
+        $postCallbacks['__isset'] = $post;
+        $postCallbacks['__unset'] = $post;
+
+
         return $this->dependencyProxyFactory->createProxy($dependency, $preCallbacks, $postCallbacks);
     }
 
-    private function getPreMethodCallback(array $aspects): callable
+    private function getPreMethodCallback(array $aspects, string $invocationClass = Invocation::class): callable
     {
         $aspects = array_filter($aspects, function ($aspect) {
             return ($aspect[1] instanceof PreAspectInterface);
         });
 
-        return function ($proxy, $instance, $methodName, $params, &$returnEarly) use ($aspects) {
+        return function ($proxy, $instance, $methodName, $params, &$early) use ($aspects, $invocationClass) {
             $callbacks = [];
             foreach ($aspects as $aspect) {
                 list($annotation, $aspect) = $aspect;
 
-                $callbacks[] = function (InvocationInterface $invocation) use ($aspect, $annotation, &$returnEarly) {
+                $callbacks[] = function (InvocationInterface $invocation) use ($aspect, $annotation, &$early) {
                     $value = $aspect->before(clone $annotation, $invocation);
-                    if ($returnEarly) {
+                    if ($early) {
                         return $value;
                     }
 
@@ -223,29 +264,29 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
                 };
             }
 
-            return (new Invocation(
+            return (new \ReflectionClass($invocationClass))->newInstanceArgs([
                 [$instance, $methodName],
                 $params,
                 $callbacks,
-                $returnEarly
-            ))->continue();
+                &$early
+            ])->continue();
         };
     }
 
-    private function getPostMethodCallback(array $aspects): callable
+    private function getPostMethodCallback(array $aspects, string $invocationClass = Invocation::class): callable
     {
         $aspects = array_filter(array_reverse($aspects), function ($aspect) {
             return ($aspect[1] instanceof PostAspectInterface);
         });
 
-        return function ($proxy, $instance, $methodName, $params, $returnValue, &$returnEarly) use ($aspects) {
+        return function ($proxy, $instance, $methodName, $params, $return, &$early) use ($aspects, $invocationClass) {
             $callbacks = [];
             foreach ($aspects as $aspect) {
                 list($annotation, $aspect)=$aspect;
 
-                $callbacks[] = function (InvocationInterface $invocation) use ($aspect, $annotation, &$returnEarly) {
+                $callbacks[] = function (InvocationInterface $invocation) use ($aspect, $annotation, &$early) {
                     $value = $aspect->after($annotation, $invocation);
-                    if ($returnEarly) {
+                    if ($early) {
                         return $value;
                     }
 
@@ -253,13 +294,13 @@ class AspectContainer implements ContainerInterface, WrappingContainerInterface
                 };
             }
 
-            return (new Invocation(
+            return (new \ReflectionClass($invocationClass))->newInstanceArgs([
                 [$instance, $methodName],
                 $params,
                 $callbacks,
-                $returnEarly,
-                $returnValue
-            ))->continue();
+                &$early,
+                $return
+            ])->continue();
         };
     }
 
